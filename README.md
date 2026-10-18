@@ -17,7 +17,7 @@
 
 1. Cloudflare 控制台 → Workers & Pages → 创建应用 → Pages → 连接 GitHub。
 2. 授权并选择 `GaiQi-NJUST/insta-course`。
-3. 生产分支 `main`，框架预设 `None`，构建命令留空，输出目录 `/`，根目录保持默认。
+3. 生产分支 `main`，框架预设 `None`，构建命令 `exit 0`，输出目录 `/`，根目录保持默认。
 4. 点击保存并部署，等待项目显示成功，先检查 Cloudflare 实际分配的 `*.pages.dev` 地址。
 5. 到该 Pages 项目的 Custom domains，添加 `insta.qigai.de5.net`，按提示完成 DNS 绑定。
 6. 如果 DNS 中已存在名为 `insta` 的旧 CNAME，修改为此次 Pages 分配的地址；不要为同名主机叠加多条 CNAME。
