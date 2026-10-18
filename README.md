@@ -2,11 +2,25 @@
 
 根据 InstaCourse-Portable-1.0.0-x64-P3Rv2.zip 中的项目说明制作的中文宣传网站。
 
+## 下载 Windows 便携版
+
+**[下载 InstaCourse v1.0.0 / P3Rv2（Windows x64，约 110 MB）](https://instacourse.gaiqi7564.chatgpt.site/download.html)**
+
+[自定义域名下载入口](https://insta.qigai.de5.net/download.html)（该入口需完成 Cloudflare Pages 与域名绑定后生效）
+
+打开下载页后点击「下载 Windows 便携包」。下载的是完整 ZIP；完整解压后运行 `InstaCourse.exe`，保留 `resources`、`locales` 等同目录文件，不提供缺少依赖的独立 EXE。
+
+## 视觉风格
+
+深海蓝夜底（#020716）、品牌蓝（#1D4CFF）、青色（#4FE3FF）；粗斜体标题与数字、-12° 斜切、真实边框与折角、硬阴影。背景网格与扫描线仅作为边缘装饰。仅借用设计语言，不使用官方 Persona 素材或 Logo。
+
 ## 文件
 
 - `index.html`：网站入口，位于仓库根目录。
-- `style.css`：白色、浅蓝色响应式样式。
-- `app.js`：界面演示、播放器示意、原版便携包下载及 SHA-256 完整性校验。
+- `style.css`：P3R 风格的深海蓝夜、斜切、硬阴影与青色高光，适配桌面与移动端。
+- `app.js`：仪表盘、平台、题库、日志的交互演示。
+- `download.html`：可独立打开的便携包下载入口。
+- `download.js`：下载进度、原版 ZIP 分片重组与 SHA-256 校验。
 - `icon.svg`：网站图标。
 - `使用说明.txt`、`LICENSE.txt`：便携包附带的说明与许可证；不修改仓库已有的 LICENSE。
 - `functions/release/[[path]].js`：Cloudflare Pages 下载资源代理，仅允许 manifest.json 与 part-XX.bin。
