@@ -1,0 +1,300 @@
+# InstaCourse
+
+多平台网课学习助手 · 桌面版（Electron）
+十三个国内网课平台的环境识别 + 自动播放 + 自动答题 + 自动翻页 + 防拦截。
+
+> **使用前请知悉**：本工具用于减少重复点击、把重复劳动交给机器。
+> 它不修改平台数据、不伪造学习记录，但**任何自动化行为都可能违反你所在平台的用户协议**。
+> 后果由使用者承担。请先用小号或非关键课程试运行，确认行为符合你学校/单位的规定。
+
+---
+
+## 1. 跑起来
+
+```bash
+npm install          # 只需一次
+npm start            # 开发模式直接起界面
+npm run pack         # 打包 → release\InstaCourse-win32-x64\InstaCourse.exe
+node  test/run.js    # 端到端自测（12 项，约 35 秒）
+```
+
+打包产物（都是 268MB 的运行时 + 我们的代码，零运行时依赖）：
+
+```
+release\InstaCourse-win32-x64\InstaCourse.exe     双击即用，可整个目录拷走
+release\InstaCourse-Portable-1.0.0-x64.zip        绿色版压缩包（110MB）
+```
+
+打包脚本是 `tools/pack.js`，只做三件事：拷 Electron 运行时 → 放代码到
+`resources\app` → 用 `build\rcedit-x64.exe` 写入图标与版本信息。**故意不用
+electron-builder**：它打 Windows 包时会下载含 macOS 符号链接的 `winCodeSign.7z`，
+非管理员账户或未开启「开发者模式」的 Windows 无法创建符号链接，7za 退出码 2，
+然后无限重试。想要 NSIS 安装包再试 `npm run dist:nsis`（需要符号链接权限）。
+
+首次 `npm install` 会下载 Electron（约 100MB），国内建议先设镜像：
+
+```powershell
+$env:ELECTRON_MIRROR = 'https://npmmirror.com/mirrors/electron/'
+```
+
+启动后：`① 仪表盘` 看状态 → `② 平台` 点一张卡 → 系统 Chrome 打开该平台 → 登录（登录态存在独立配置目录里，下次免登录）→ 进入课程，引擎自动接管。
+
+### 浏览器模式 vs 内置窗口
+
+`② 平台` 里点卡片默认走**浏览器模式**：起一个自己的 Chrome（独立 `--user-data-dir`，
+不碰你日常用的那个），用 CDP 把引擎注入到每个页面和 iframe 里。
+
+| | 浏览器模式（默认） | 内置窗口 |
+|---|---|---|
+| 用哪个浏览器 | 系统 Chrome / Edge | Electron 自带 Chromium |
+| 登录态 | 独立配置目录，首次需登录一次 | 同上，另一个目录 |
+| 插件冲突 | 无（你平时装的扩展不在这个配置里） | 无 |
+| 适合 | 日常使用，最稳 | 想在一个窗口里看全部 |
+
+原理（`src/main/chrome-session.js`）：`--remote-debugging-port` 起浏览器 →
+`Target.setAutoAttach(flatten)` 自动挂上**所有** target → 每个文档
+`Runtime.addBinding('__icb')` + `Page.addScriptToEvaluateOnNewDocument(核心源码)`。
+所以平台把题藏在 iframe、或者中途新开标签页，都躲不过注入。
+
+Cookie 每 60 秒自动备份到 `userData\cookies.json`（只存网课平台域名，其他站点一概不碰）；
+换机器后可在 `④ 参数` 里「导入 Cookie」恢复，也可以直接开浏览器重新登录一次。
+
+命令行也可以直接开课程窗：`electron . --open=https://mooc1.chaoxing.com/`
+
+两个自测开关（都可以在打包后的 exe 上用）：
+
+```
+InstaCourse.exe --self-test-chrome=http://127.0.0.1:8123/page.html   只测浏览器注入链路
+InstaCourse.exe --self-test-ui                                        测界面点卡片 → 起 Chrome
+```
+
+---
+
+## 2. 支持的平台
+
+| 平台 | 适配器 | 备注 |
+|---|---|---|
+| 超星学习通 / 尔雅 / 学银在线 | `chaoxing` `erya` `xueyinonline` | 三家共用前端骨架，章节测验在 iframe 里，已做跨帧取题 |
+| 中国大学 MOOC（爱课程） | `mooc163` | 播放器内核会周期性把倍速写回 1，靠 4 秒校准压制 |
+| 雨课堂 / 学堂在线 | `yuketang` | SPA 路由，靠 `popstate` + `hashchange` 重建上下文 |
+| 智慧树 | `zhihuishu` | 有「检测到多端学习」弹窗，守卫会清掉并记一次风控 |
+| 智慧职教 / 职教云 | `icve` | 目录树结构，未完成节点带专用图标 |
+| U 校园 | `ulearning` | — |
+| 国家智慧教育公共服务平台 | `smartedu` | — |
+| 超星泛雅 / 慕课网校 / 重庆高校在线 / 优课在线 / 湖南继续教育 | `pmphmooc` `ouchn` `cqvoooc` `uocc` `hnsvu` | 复用超星系选择器 |
+| 任意其他平台 | `generic` | 域名没命中时按结构特征兜底：有 `<video>` + 有目录就当中文网课站处理 |
+
+平台清单在 `src/main/platforms.js`，选择器在 `src/core/adapters/`。
+**加一个平台 = 加一个文件 + 注册一条 hosts 正则**，引擎不用改。
+
+---
+
+## 3. 它到底做了什么
+
+### 3.1 看视频（`src/core/engine.js` · `tickVideo`）
+- 自动播放，被策略拦了就改点播放器自绘按钮（`.vjs-big-play-button` 等一串）。
+- 倍速默认 2x，带 ±0.25 抖动，**每 4 秒校准一次**——因为播放器内核会自己写回 1。
+- 卡死自救：进度 25 秒不动 → 微调 `currentTime`；还不动 → `load()` 后回到原位置；
+  连续 5 次失败 → 停下来等人，不硬刷。
+- 播完只处理一次（`ended` 是持续状态，不记账会连点好几个下一节）。
+
+### 3.2 看文档（`tickDoc`）
+按真人节奏（每次 90–320px）滚动 `.docContent` / `#panView` / PDF 容器，滚到底后等平台的完成标记。
+
+### 3.3 做题（`tickQuiz` + `src/core/tiku.js`）
+- 三种题型：单选/多选按序号或选项原文、判断按「对/错」语义、填空按顺序写入。
+- 题干先清洗：去题号、去「（2分）」、去「【单选题】」，然后归一化匹配。
+- 匹配由严到宽：完全相同 → 双向包含取最长 → 前 12 字前缀。**不猜**：没命中就记一条 warn 跳过，猜错比不做更危险。
+- 答案速率是平台最好用的检测特征，所以默认带 `humanize`：读题时间按题干长度浮动。
+- 提交只点**这一题所在框内**的按钮，避免把整卷交上去。
+
+### 3.4 翻页（`goNext`）
+四级兜底：页面上的「下一节」按钮 → 按文字找 → 目录里第一个未完成节点 → 都没有就停。
+**防死循环**：连点 4 次页面都没跳走 → 间隔从 1× 拉到 4×，然后停下等人确认。
+
+---
+
+## 4. 防拦截（这部分是本项目的重点）
+
+### 4.1 环境伪装 `src/core/anti/stealth.js`（12 个模块）
+
+| 模块 | 做法 | 为什么 |
+|---|---|---|
+| ① 原生函数伪装 | `Function.prototype.toString` 对补丁函数返回 `[native code]` | 平台一句 `fn.toString().includes('native code')` 就能认出注入 |
+| ② webdriver | `navigator.webdriver → false` | 最粗暴的自动化特征 |
+| ③ plugins/mimeTypes | 伪造 5 个 PDF 插件 | 无头/自动化环境插件列表为空 |
+| ④ 语言与时区 | `zh-CN` 优先的 languages | 与 `Accept-Language` 对齐 |
+| ⑤ window.chrome | 补 `runtime/app/loadTimes/csi` | Electron 下这几个是缺失的，缺失本身就是特征 |
+| ⑥ WebGL | 37445/37446 换成真实显卡串 | 软件渲染器字符串会暴露无头环境 |
+| ⑦ 权限与连接 | 修正 `permissions.query` 的 notifications | 自动化环境恒返回 denied |
+| ⑧ 页面可见性 | `hidden=false`、`visibilityState=visible`、`hasFocus()=true`，并拦截 `visibilitychange/blur/pagehide` 回调 | **挂机核心**：切到后台平台会暂停计时 |
+| ⑨ 倍速欺骗 | `playbackRate` getter 对外永远返回 1，真值走 WeakMap 私有通道 | 平台普遍检测 `playbackRate !== 1` |
+| ⑩ iframe 泄漏 | 清理子帧 `contentWindow` 原型链 | 跨帧原型不一致也是特征 |
+| ⑪ 调用栈净化 | `Error.prepareStackTrace` 过滤含 `electron/ipcRenderer` 的帧 | 栈里出现 Electron 就等于自报家门 |
+| ⑫ 控制台静音 | 过滤带私有前缀的日志 | 别在控制台留证据 |
+
+三条纪律：补丁必须像原生函数；视频状态只存 `WeakMap`（不往元素挂可枚举属性）；所有补丁 `configurable:true`。
+
+### 4.2 风控守卫 `src/core/anti/guard.js`
+
+- **风险词扫描**：页面出现「检测到多端 / 异常学习 / 请勿使用插件 / 人脸识别」等 → 立即暂停并高亮，不继续动作。
+- **弹窗清理**：按选择器 + 「不含题干/提交/确定」的双重判据清广告与提醒层，顺手解开 `overflow:hidden` 锁。
+- **进度护栏**：记录每个 url 的最大进度，**发现回退就停**（说明平台在纠正，再刷只会更糟）。
+- **日时长上限**：默认 480 分钟，到了就停。
+- **反纠正**：平台把倍速写回 1 时重新压制，并统计「打架次数」，太频繁就降速。
+- **反拦截**：`confirm → true`、`alert` 置空、`beforeunload` 拦截、`requestAnimationFrame` 在后台用 `setTimeout(16ms)` 兜底。
+
+### 4.3 为什么不用油猴脚本
+
+油猴脚本活在页面里，`window` 上一定会多出东西（GM_* 垫片、脚本对象、`__AC_*` 全局），
+而且 `document-start` 也抢不过平台的在页面 `<head>` 里同步执行的检测脚本。
+本项目把核心代码塞进 **preload 的同一个 `new Function` 闭包**：`window` 上没有任何新属性、
+页面里没有任何新 DOM、与主进程只走 `ipcRenderer`。平台扫不到东西，就没有「脚本对象」可检测。
+
+---
+
+## 5. 目录
+
+```
+src/
+  main/            主进程
+    index.js       入口、单实例、启动开关
+    windows.js     主窗 / 课程窗、UA 清洗、下载与权限策略
+    ipc.js         全部 IPC（配置、日志、状态、开窗、浏览器、Cookie）
+    store.js       config.json / bank.txt / profile / cookies.json 的读写
+    platforms.js   13 个平台的元数据与域名正则
+    chrome-session.js  ★ 浏览器模式：起 Chrome、CDP 自动注入所有页面与 iframe、抓 Cookie
+    browser.js     浏览器模式单例管家（生命周期 + 事件转发给界面）
+    chrome.js      找浏览器、挑空闲端口、启动参数
+    cdp.js         极简 CDP 客户端（WebSocket，零依赖）
+    ws.js          极简 WebSocket 帧编解码（客户端）
+    inject-core.js 拼装注入源码、生成 cmd 表达式
+    selftest-chrome.js / selftest-ui.js  两个自测入口
+  preload/
+    app.js         界面壳的 contextBridge
+    course.js      ★ 课程窗口：拼核心代码 → 一个闭包 → 启动
+  core/            与平台无关的引擎（也在闭包里，不挂 window）
+    kernel.js      配置默认值、日志、状态、工具函数
+    engine.js      看视频 / 看文档 / 做题 / 翻页
+    tiku.js        题库解析与匹配（内置 36 条 + 本地 + 可选在线）
+    boot.js        启动顺序：伪装 → 题库 → 守卫 → 引擎
+    diag.js        选择器体检（适配器坏掉时唯一的线索）
+    anti/          stealth.js · guard.js · human.js（拟人化输入）
+    adapters/      chaoxing · mooc163 · yuketang · others
+  renderer/        P3R 风格界面（index.html · p3r.css · app.js）
+tools/
+  pack.js          ★ 便携版打包（不依赖 electron-builder）
+test/
+  page.html        假课程页（现场录 6 秒 webm + 两道题 + 假广告）
+  serve.js         独立起静态服务器
+  run.js           ★ 端到端自测（内置窗口）
+build/
+  icon.ico         应用图标（打包时写进 exe）
+  rcedit-x64.exe   改 exe 图标与版本信息的小工具
+```
+
+数据目录：`%APPDATA%\instacourse\`
+（`config.json` 参数、`bank.txt` 题库、`profile\` 内置窗口登录态、
+`chrome-profile\` 浏览器模式登录态、`cookies.json` Cookie 备份。
+可用环境变量 `IC_USERDATA` 指到别处，做绿色版或隔离测试。）
+
+---
+
+## 6. 题库格式
+
+`bank.txt`，UTF-8，一行一题：
+
+```
+# 井号开头是注释
+马克思主义中国化的第一次重大理论成果是什么？	B
+内存断电后数据会丢失。	对
+一个字节由____位二进制数组成。	8
+习近平新时代中国特色社会主义思想	ABCD
+```
+
+- 分隔符：`Tab` 优先，其次 `|`。
+- 答案：单选 `A` 或 `1`（基准见 `answerIndexBase`）；多选 `ABD` / `A,B,D` / `A B D`；
+  判断 `对/错`、`T/F`、`√/×`、`是/否`；填空直接写文本，多个空用 `|` 分隔。
+- 也可以直接写选项原文（如「毛泽东思想」），引擎会做去前缀后的双向包含匹配。
+- 界面第 `③ 题库` 页可以直接编辑保存，保存后已开的课程窗会立即生效（配置走 `ic:config:apply` 广播）。
+
+---
+
+## 7. 参数
+
+界面 `④ 参数` 页可调，也可以直接改 `config.json`：
+
+| 键 | 默认 | 说明 |
+|---|---|---|
+| `speed` | 2.0 | 目标倍速；对平台始终显示 1x |
+| `speedJitter` | 0.25 | 倍速抖动，让速率曲线不像机器 |
+| `maxSpeed` | 16 | 上限 |
+| `autoPlay` `autoNext` `autoDoc` `autoQuiz` `autoSubmit` | true | 五类动作开关 |
+| `answerIndexBase` | 1 | 数字答案的起始索引（`1` = A 是 1，`0` = A 是 0） |
+| `humanize` | true | 拟人化：读题延时、贝塞尔鼠标轨迹、逐字输入 |
+| `nextDelay` | 4000 | 播完后等多久翻页 |
+| `answerDelay` | 2200 | 选完到提交的间隔 |
+| `stallTimeout` | 25000 | 卡死判定 |
+| `maxDailyMinutes` | 480 | 日学习时长上限 |
+| `killPopup` `antiDetect` `antiGuard` `antiAway` `hideTraces` | true | 五类防护开关 |
+| `tikuOnline` | false | 命中内置/本地题库仍失败时是否查在线题库（需自备接口，见下） |
+
+在线题库是**可选**的：填 `tikuEndpoint` 与 `tikuToken` 后，本地未命中的题会带题干去查一次。
+接口约定 `POST {q}` → `{answer}`。默认关闭，因为第三方题库的准确率没有保证，
+而一次错答的代价（正确率被拉低）比少做一题高得多。
+
+---
+
+## 8. 自测
+
+```bash
+node test/run.js
+```
+
+起一个本地假课程页（canvas 现场录 6 秒 webm + 单选 + 判断 + 假广告弹窗），
+用独立 `IC_USERDATA` 和数据目录启动真 exe，跑 34 秒后逐条断言 12 项：
+
+```
+ 1 环境伪装就位          7 选择题命中题库并提交
+ 2 题库加载（含本地条目）  8 至少提交 2 题
+ 3 风控守卫启动          9 判断题命中题库
+ 4 引擎启动             10 播完自动翻页
+ 5 视频被接管           11 页面不跳转时会收手，不死循环
+ 6 倍速生效且对外 1x     12 状态上报到主进程
+```
+
+浏览器模式另有两项（都跑在生产入口 `src/main/index.js` 上，不打到假 app 路径去）：
+
+```bash
+# 1) 只测「起 Chrome + CDP 注入 + 回传」链路，22 秒后打印结论
+electron . --self-test-chrome=http://127.0.0.1:8123/page.html
+
+# 2) 测界面：开主窗 → 点第一张平台卡 → 等 Chrome 起来 → 截两张图
+electron . --self-test-ui
+```
+
+第 1 项应当输出：注入框架数 ≥ 1、收到日志 ≥ 30 条、收到状态帧 ≥ 10、
+`结论：通过 · 注入与回传链路正常`。第 2 项会写出 `_ui-platform.png` 与
+`_ui-platform-open.png`，控制台行会打印
+`{"bl":"Chrome · 正在刷 学习通 / 超星尔雅","frames":"1","live":1,...}`。
+
+---
+
+## 9. 已知限制
+
+- **只在本地假页面验证过**。真实平台的选择器与弹窗形态会变，首次使用请盯着日志跑完一节，
+  确认「命中题库」「已提交」都合理再放手。`src/core/adapters/*.js` 里改选择器即可，不用动引擎。
+- 打包出的 exe 未做代码签名，Windows SmartScreen 会提示「未知发布者」。
+- **浏览器模式需要本机装有 Chrome 或 Edge**（没有就自动退回内置窗口）。
+  它用的是独立配置目录，所以第一次要点卡片后在弹出的浏览器里**登录一次**；
+  之后登录态一直留着，换机器可导出 `cookies.json` 带走。
+- 浏览器模式会自动接管你在那个 Chrome 里访问的课程页。刷课期间别在那个 Chrome 里
+  干别的（比如开别的学校的课），否则会被当成「切到了另一个任务点」。
+- macOS / Linux 未适配（`windows.js` 里有权限与下载策略是 Windows 优先的）。
+- 人脸识别/活体检测课程**没有**绕过方案，也不打算做——那已经越过「自动化」的边界了。
+
+---
+
+## 10. 许可
+
+MIT。仅供学习与技术研究，请遵守你所在平台的用户协议与学校规定。
